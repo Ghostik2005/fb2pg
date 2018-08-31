@@ -5,7 +5,6 @@ import threading
 import traceback
 
 import init
-
 import db_create
 
 def main():
@@ -14,9 +13,10 @@ def main():
     if sys.stderr.encoding != 'UTF-8':
         sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1, encoding='UTF-8')
 
-    app_conf = init.INIT_APP()
-    cre = 1
-    pump = 1
+    ini = init.INIT_APP()
+
+    cre = ini.params.create
+    pump = ini.params.pump
     options = None
     idx_opt= None
     trig_opt = None
@@ -25,34 +25,35 @@ def main():
         try:
             t1 = time.time()
             #tables
-            seqs = db_create.get_triggers_gen_info()
+            seqs = db_create.get_triggers_gen_info(ini)
             if cre == 1:
-                options = db_create.get_fb_tables()
+                options = db_create.get_fb_tables(ini)
             if options:
-                for sql in db_create.cre_sql_tables(options, seqs):
-                    db_create.set_exec(sql, debug=1)
+                for sql in db_create.cre_sql_tables(ini, options, seqs):
+                    db_create.set_exec(ini, sql, debug=1)
             #indices
             if cre == 1:
-                idx_opt = db_create.get_indices_info()
+                idx_opt = db_create.get_indices_info(ini)
             if idx_opt:
-                for sql in db_create.cre_sql_indices(idx_opt):
-                    db_create.set_exec(sql, debug=1)
+                for sql in db_create.cre_sql_indices(ini, idx_opt):
+                    pass
+                    db_create.set_exec(ini, sql, debug=1)
 
             #main pump
             if pump == 1:
-                for t, f in db_create.get_pg_tables():
-                    db_create.get_fb_data(t, f, debug=1)
+                for t, f in db_create.get_pg_tables(ini):
+                    db_create.get_fb_data(ini, t, f, only=ini.params.only, debug=1)
 
             if pump == 1:
-                for sql in db_create.get_generator_value():
-                    db_create.set_exec(sql, debug=1)
+                for sql in db_create.get_generator_value(ini):
+                    db_create.set_exec(ini, sql, debug=1)
 
             #triggers
             if cre == 1:
-                trig_opt = db_create.get_triggers_info()
+                trig_opt = db_create.get_triggers_info(ini)
             if trig_opt:
-                for sql in db_create.cre_sql_trigers(trig_opt):
-                    db_create.set_exec(sql, debug=1)
+                for sql in db_create.cre_sql_trigers(ini, trig_opt):
+                    db_create.set_exec(ini, sql, debug=1)
 
 
             t2 = time.time()
@@ -63,7 +64,7 @@ def main():
             
             #check results
             sql = """select id_spr, c_tovar, c_opisanie, dt, dt_actual from SPR where id_spr = 36"""
-            res = db_create.pg_check(sql)
+            res = db_create.pg_check(ini, sql)
             for row in res:
                 for col in row:
                     try:

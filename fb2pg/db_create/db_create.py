@@ -1,9 +1,11 @@
 
 import psycopg2
+from multiprocessing.dummy import Pool as ThreadPool
+
 from dbcon import FBConn
 from dbcon import PGConn
 
-def get_fb_tables():
+def get_fb_tables(ini):
     sql = """select R.RDB$RELATION_NAME, R.RDB$FIELD_POSITION, R.RDB$FIELD_NAME,
 F.RDB$FIELD_LENGTH, 
 case f.rdb$field_type
@@ -52,7 +54,7 @@ where F.RDB$FIELD_NAME = R.RDB$FIELD_SOURCE and R.RDB$SYSTEM_FLAG = 0 and R.RDB$
 order by R.RDB$RELATION_NAME, R.RDB$FIELD_POSITION"""
     res = None
     all_data = []
-    with FBConn() as fdb:
+    with FBConn(ini) as fdb:
         fdb.request(sql)
         res = fdb.fetch()
     if res:
@@ -80,7 +82,7 @@ order by R.RDB$RELATION_NAME, R.RDB$FIELD_POSITION"""
         all_data.append(column)
     return all_data
 
-def get_indices_info():
+def get_indices_info(ini):
     sql = """SELECT r.RDB$INDEX_NAME as I_NAME, r.RDB$RELATION_NAME as T_NAME, s.RDB$FIELD_NAME as F_NAME, s.RDB$FIELD_POSITION as POS_IN_MULT,
     CASE r.RDB$UNIQUE_FLAG
         WHEN 1 THEN 'UNIQUE'
@@ -103,7 +105,7 @@ AND r.RDB$INDEX_INACTIVE = 0
 ORDER by r.RDB$INDEX_NAME, s.RDB$FIELD_POSITION"""
     res = None
     all_data = []
-    with FBConn() as fdb:
+    with FBConn(ini) as fdb:
         fdb.request(sql)
         res = fdb.fetch()
     if res:
@@ -129,7 +131,7 @@ ORDER by r.RDB$INDEX_NAME, s.RDB$FIELD_POSITION"""
         all_data.append(column)
     return all_data
 
-def get_triggers_info():
+def get_triggers_info(ini):
     sql = """SELECT r.RDB$TRIGGER_NAME, r.RDB$RELATION_NAME,
     CASE r.RDB$TRIGGER_TYPE
     WHEN 1 THEN 'BEFORE INSERT'
@@ -157,7 +159,7 @@ FROM RDB$TRIGGERS r
 WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
     res = None
     options = []
-    with FBConn() as fdb:
+    with FBConn(ini) as fdb:
         fdb.request(sql)
         res = fdb.fetch()
     if res:
@@ -170,13 +172,13 @@ WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
             options.append(trig)
     return options
 
-def get_triggers_gen_info():
+def get_triggers_gen_info(ini):
     sql = """SELECT r.RDB$TRIGGER_SOURCE, r.RDB$RELATION_NAME
 FROM RDB$TRIGGERS r
 WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
     res = None
     options = {}
-    with FBConn() as fdb:
+    with FBConn(ini) as fdb:
         fdb.request(sql)
         res = fdb.fetch()
     if res:
@@ -194,14 +196,14 @@ WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
                         options[name.strip().upper()] = field.strip().upper()
     return options
 
-def get_generators_info():
+def get_generators_info(ini):
     sql = """SELECT r.RDB$GENERATOR_NAME
 FROM RDB$GENERATORS r
 WHERE r.RDB$SYSTEM_FLAG != 1
     AND r.RDB$GENERATOR_NAME NOT CONTAINING '$'
 ORDER by r.RDB$GENERATOR_NAME"""
     res = None
-    with FBConn() as fdb:
+    with FBConn(ini) as fdb:
         fdb.request(sql)
         res = fdb.fetch()
     if res:
@@ -214,22 +216,22 @@ ORDER by r.RDB$GENERATOR_NAME"""
 
 
 
-def get_procedures_info():
+def get_procedures_info(ini):
     sql = """
 
 """
     res = None
-    with FBConn() as fdb:
+    with FBConn(ini) as fdb:
         fdb.request(sql)
         res = fdb.fetch()
     if res:
         for row in res:
             print(*row, flush=True)
 
-def set_database():
+def set_database(ini):
     sql_cre_db = """create database SPR"""
 
-def cre_sql_tables(options, seqs):
+def cre_sql_tables(ini, options, seqs):
     seqs_names = seqs.keys()
     sql_template = """CREATE TABLE IF NOT EXISTS %s ( %s"""
     sql_grant = None
@@ -241,14 +243,14 @@ def cre_sql_tables(options, seqs):
                 seq = seqs.get(name)
             else:
                 seq = None
-            sql_grant = "\nGRANT ALL PRIVILEGES ON %s TO postgres;" % name
+            #sql_grant = "\nGRANT ALL PRIVILEGES ON %s TO postgres;" % name
             fields_insert = []
             data = opt.get('data')
             for row in data:
                 r = []
                 c_name = row.get('name').strip()
                 #преобразуем имена колонок для зарезервированных слов
-                c_name = _check_names(c_name)
+                c_name = _check_names(ini, c_name)
                 r.append(c_name)
                 c_type = row.get('type').strip()
                 if seq == c_name:
@@ -281,14 +283,14 @@ def cre_sql_tables(options, seqs):
         cou = sql.count('PRIMARY KEY')
         if cou > 1:
             sql = sql.replace('PRIMARY KEY', '')
-            sql += get_pkeys(name)
+            sql += get_pkeys(ini, name)
         sql += " );"
         if sql_grant:
             sql += sql_grant
         print('creating table %s' % name)
         yield sql
 
-def cre_sql_indices(options):
+def cre_sql_indices(ini, options):
     sql_template = """CREATE %s INDEX IF NOT EXISTS %s on %s (%s %s)"""
     for opt in options:
         name = opt.get('idx_name')
@@ -305,7 +307,7 @@ def cre_sql_indices(options):
                 i_seg = row.get('segment')
                 if i_seg == 1:
                     i_field = row.get('field_name')
-                    i_field = _check_names(i_field)
+                    i_field = _check_names(ini, i_field)
                     r.append(i_field)
                     i_type = row.get('type')
                     r.append(i_type)
@@ -314,7 +316,7 @@ def cre_sql_indices(options):
                     i_type = row.get('type')
                     while i_seg != 0:
                         i_field = row.get('field_name')
-                        i_field = _check_names(i_field)
+                        i_field = _check_names(ini, i_field)
                         ffs.append(i_field)
                         if len(data) > 0:
                             row = data.pop(0)
@@ -326,7 +328,7 @@ def cre_sql_indices(options):
         print('creating indice %s' % name)
         yield sql
 
-def get_pkeys(table):
+def get_pkeys(ini, table):
     res = None
     sql = """SELECT fname, fpos, iname
 FROM RDB$RELATION_CONSTRAINTS c
@@ -339,7 +341,7 @@ join (
     WHERE r.RDB$RELATION_NAME = '%s'
     ) on c.RDB$INDEX_NAME = iname
 ORDER by fpos ASC""" % table
-    with FBConn() as fdb:
+    with FBConn(ini) as fdb:
         fdb.request(sql)
         res = fdb.fetch()
     sql_ins = """,\nCONSTRAINT %s PRIMARY KEY(%s)"""
@@ -350,7 +352,7 @@ ORDER by fpos ASC""" % table
         sql_ins = sql_ins % (res[0][2].strip(), ','.join(ins))
     return sql_ins
 
-def cre_sql_trigers(trig_opt):
+def cre_sql_trigers(ini, trig_opt):
     sql_template_func = """CREATE OR REPLACE FUNCTION {0}() RETURNS TRIGGER AS $$
 {1}
 BEGIN
@@ -434,17 +436,17 @@ CREATE TRIGGER {0}
         print('creating trigger %s' % trig_name)
         yield sql
 
-def set_exec(sql, debug=False):
-    with PGConn(debug=debug) as db:
+def set_exec(ini, sql, debug=False):
+    with PGConn(ini, debug=debug) as db:
         db.execute(sql)
 
-def get_pg_tables(debug=False):
+def get_pg_tables(ini, debug=False):
     res = None
     name = None
     fields = None
     old_name = None
     sql = """select table_name, column_name, ordinal_position from information_schema.columns where table_schema='public' order by table_name, ordinal_position;"""
-    with PGConn(debug=debug) as db:
+    with PGConn(ini, debug=debug) as db:
         db.execute(sql)
         res = db.fetch()
     if res:
@@ -466,22 +468,73 @@ def get_pg_tables(debug=False):
             old_name = name
         yield old_name, fields
 
-def _gen_get_data(*args, debug=False):
-    print('start from ->', args[2])
-    sql_template = """select {0} from {1} r order by r.{4} asc rows {2} to {3}"""
-    sql = sql_template.format(*args)
-    res = None
-    with FBConn(debug=debug) as fdb:
+def _gen_get_data(kwargs):
+    ini = kwargs.get('ini')
+    debug = kwargs.get('debug')
+    fields = kwargs.get('fields')
+    name = kwargs.get('name')
+    c1 = kwargs.get('c1')
+    c2 = kwargs.get('c2')
+    sql_fields = kwargs.get('sql_fields')
+    cpu = kwargs.get('cpu')
+    pk = kwargs.get('pk')
+    print('start pump: thread-> %s ; from position-> %s' %(cpu, c1), flush=True)
+    sql_template = """select {0} from {1} r order by r.{2} asc rows {3} to {4}"""
+    sql_t = """insert into {0} ({1}) values ({2}) ON CONFLICT DO NOTHING;"""
+    sql = sql_template.format(sql_fields, name, pk, c1, c2)
+    params = []
+    rows = None
+    cc = 0
+    with FBConn(ini, debug=debug) as fdb:
         fdb.request(sql)
-        res = fdb.fetch()
-    yield res
+        rows = fdb.fetch()
+    if rows:
+        for row in rows:
+            row_ins = []
+            for col in row:
+                row_ins.append(col)
+            params.append(row_ins)
+            cc += 1
+    #проверяем, может какое поле bytea
+    byteas = []
+    sql_check = """select table_name, column_name, data_type
+from information_schema.columns
+where table_name = '%s' and data_type = 'bytea';""" % name
+    res = None
+    with PGConn(ini, debug=debug) as db:
+        db.request(sql_check)
+        res = db.fetch()
+    if res:
+        for row in res:
+            byteas.append(row[1])
+    qqs = []
+    iis = []
+    for i, f in enumerate(fields):
+        if f in byteas:
+            iis.append(i)
+        q = '%s'
+        qqs.append(q)
+    values = ','.join(qqs)
+    for i in iis:
+        for para in params:
+            if para[i]:
+                try:
+                    data = para[i].encode()
+                except:
+                    data = para[i]
+                para[i] = psycopg2.Binary(data)
+    sql_fields = ','.join([_check_names(ini, fi) for fi in fields])
+    with PGConn(ini, debug=debug) as db:
+        sql = sql_t.format(name, sql_fields, values)
+        db.executemany(sql, params)
+    return cc
 
-def _check_names(in_field):
-    if in_field in ['USER', 'GROUP', 'DATE', 'COLUMN']:
+def _check_names(ini, in_field):
+    if in_field in ini.params.excludes:
         in_field = '"%s"' % in_field
     return in_field
 
-def get_fb_data(name, fields, only=None, exclude=None, debug=False):
+def get_fb_data(ini, name, fields, only=None, exclude=None, debug=False):
     print('pumping %s' % name)
     if only and name != only:
         print('skipping')
@@ -489,10 +542,9 @@ def get_fb_data(name, fields, only=None, exclude=None, debug=False):
     if exclude and name.lower() in exclude:
         print('skipping')
         return
-    
     res = None
     sql = """select count(*) from %s""" % name.upper()
-    with FBConn(debug=debug) as fdb:
+    with FBConn(ini, debug=debug) as fdb:
         fdb.request(sql)
         res = fdb.fetch()
     if res:
@@ -502,7 +554,7 @@ def get_fb_data(name, fields, only=None, exclude=None, debug=False):
     if total_count == 0:
         return
     c1 = 1
-    cnt = 1000
+    cnt = ini.params.potion
     c2 = c1 + cnt - 1
     sql_fb = """select R.RDB$RELATION_NAME, R.RDB$FIELD_NAME, tt PK
 from RDB$FIELDS F, RDB$RELATION_FIELDS R
@@ -534,7 +586,7 @@ WHERE
 c.oid = ('%s')::regclass::oid and not i.indisprimary
 ORDER BY ic.relname;"""%name
     res = None
-    with FBConn(debug=debug) as fdb:
+    with FBConn(ini, debug=debug) as fdb:
         fdb.request(sql_fb)
         res = fdb.fetch()
     if res:
@@ -543,82 +595,46 @@ ORDER BY ic.relname;"""%name
         pk = 'RDB$DB_KEY'
     f_ins = []
     for field in fields:
-        field = _check_names(field)
+        field = _check_names(ini, field)
         f_ins.append('r.' + field)
     sql_fields = ','.join(f_ins)
     cc = 0
-    sql_t = """insert into {0} ({1}) values ({2}) ON CONFLICT DO NOTHING;"""
     indices_drop = None
     indeces_sqls = None
+    #отключаем индексы (удаляем)
+    with PGConn(ini, debug=debug) as db:
+        db.request(sql_ind)
+        res = db.fetch()
+        indices_drop, indeces_sqls = _get_pg_indeces(ini, res)
+        if indices_drop:
+            db.execute(indices_drop)
+    cpu_number = ini.params.cpu
     while total_count > 0:
-        #отключаем индексы (удаляем
-        with PGConn(debug=debug) as db:
-            db.request(sql_ind)
-            res = db.fetch()
-            indices_drop, indeces_sqls = _get_pg_indeces(res)
-            if indices_drop:
-                db.execute(indices_drop)
-                
-        params = []
-        for rows in _gen_get_data(sql_fields, name, c1, c2, pk, debug=debug):
-            if rows:
-                for row in rows:
-                    row_ins = []
-                    for col in row:
-                        #if isinstance(col, bytes):
-                            #col = col.decode()
-                        row_ins.append(col)
-                    params.append(row_ins)
-                    #print(row)
-                    cc += 1
-        #проверяем, может какое поле bytea
-        byteas = []
-        sql_check = """select table_name, column_name, data_type
-from information_schema.columns
-where table_name = '%s' and data_type = 'bytea';""" % name
-        res = None
-        with PGConn(debug=debug) as db:
-            db.request(sql_check)
-            res = db.fetch()
-        if res:
-            for row in res:
-                byteas.append(row[1])
-        qqs = []
-        iis = []
-        for i, f in enumerate(fields):
-            if f in byteas:
-                iis.append(i)
-                #q = '%s::bytea'
-                q = '%s'
-                #input('->>>')
-            else:
-                q = '%s'
-            qqs.append(q)
-        values = ','.join(qqs)
-        for i in iis:
-            for para in params:
-                #print(para[i])
-                if para[i]:
-                    try:
-                        data = para[i].encode()
-                    except:
-                        data = para[i]
-                    para[i] = psycopg2.Binary(data)
-        sql_fields = ','.join([_check_names(fi) for fi in fields])
+        #создаем пулл в зависимости от количества ядер
+        pool = ThreadPool(cpu_number)
+        p_list = []
+        for cpu in range(cpu_number):
+            pump_params = {'ini': ini, 'sql_fields': sql_fields, 'name': name, 'c1': c1, 'c2': c2, 'pk': pk, 'fields': fields, 'debug':debug, 'cpu': cpu}
+            p_list.append(pump_params)
+            c2 = c2 + cnt
+            c1 = c1 + cnt
+            total_count -= cnt
+        results = pool.map(_gen_get_data, p_list)
+        pool.close()
+        pool.join()
+        q = 0
+        for r in results:
+            q += int(r)
+        cc += q
 
-        with PGConn(debug=debug) as db:
-            sql = sql_t.format(name, sql_fields, values)
-            db.executemany(sql, params)
-        c2 = c2 + cnt
-        c1 = c1 + cnt
-        total_count -= cnt
-        #включаем индексы (создаем)
-        with PGConn(debug=debug) as db:
-            if indeces_sqls:
-                db.execute(indeces_sqls)
+    #включаем индексы (создаем)
+    with PGConn(ini, debug=debug) as db:
+        if indeces_sqls:
+            db.execute(indeces_sqls)
     print('total->', cc)
 
-def _get_pg_indeces(res):
+
+def _get_pg_indeces(ini, res):
     indices = []
     drops = []
     sql_drop = "DROP INDEX IF EXISTS %s ;"
@@ -629,14 +645,14 @@ def _get_pg_indeces(res):
         drops.append(sql_drop % row[2])
     return '\n'.join(drops), '\n'.join(indices)
 
-def pg_check(sql, debug=False):
+def pg_check(ini, sql, debug=False):
     res = None
-    with PGConn(debug=debug) as db:
+    with PGConn(ini, debug=debug) as db:
         db.request(sql)
         res = db.fetch()
     return res
 
-def get_generator_value(debug=False):
+def get_generator_value(ini, debug=False):
     sql = """SELECT r.RDB$TRIGGER_SOURCE, r.RDB$RELATION_NAME
 FROM RDB$TRIGGERS r
 WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
@@ -644,7 +660,7 @@ WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
     sql_template = """select setval('%s', %s, true);"""
     res = None
     options = {}
-    with FBConn(debug=debug) as fdb:
+    with FBConn(ini, debug=debug) as fdb:
         fdb.request(sql)
         res = fdb.fetch()
     if res:
@@ -666,7 +682,7 @@ WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
                 res = None
                 if act:
                     sql = sql_temp % act
-                    with FBConn(debug=debug) as fdb:
+                    with FBConn(ini, debug=debug) as fdb:
                         fdb.request(sql)
                         res = fdb.fetch()
                     if res:
