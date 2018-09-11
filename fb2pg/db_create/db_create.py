@@ -1,7 +1,7 @@
+#coding: utf-8
 
 import psycopg2
 from multiprocessing.dummy import Pool as ThreadPool
-
 from dbcon import FBConn
 from dbcon import PGConn
 
@@ -54,18 +54,14 @@ where F.RDB$FIELD_NAME = R.RDB$FIELD_SOURCE and R.RDB$SYSTEM_FLAG = 0 and R.RDB$
 order by R.RDB$RELATION_NAME, R.RDB$FIELD_POSITION"""
     res = None
     all_data = []
-    with FBConn(ini) as fdb:
-        fdb.request(sql)
-        res = fdb.fetch()
+    res = get_fdb(ini, sql, debug=debug)
     if res:
         old_row = None
         fg_first = True
         while res:
             row = res.pop(0)
-            #print(*row, sep='\t', flush=True)
             if old_row != row[0]:
                 #первое вхождение
-                #print('first_time', row[0], sep='\t')
                 if not fg_first:
                     all_data.append(column)
                 column = {}
@@ -78,7 +74,6 @@ order by R.RDB$RELATION_NAME, R.RDB$FIELD_POSITION"""
                 c_data = {'name': row[2], 'size': row[3], 'type': row[4], 'notnull': True if row[8]=='1' else False, 'pk': True if row[7]=='1' else False, 'default': row[9] if row[9] else False}
                 column['data'].append(c_data)
             old_row = row[0]
-            #print(column)
         all_data.append(column)
     return all_data
 
@@ -105,15 +100,12 @@ AND r.RDB$INDEX_INACTIVE = 0
 ORDER by r.RDB$INDEX_NAME, s.RDB$FIELD_POSITION"""
     res = None
     all_data = []
-    with FBConn(ini) as fdb:
-        fdb.request(sql)
-        res = fdb.fetch()
+    res = get_fdb(ini, sql, debug=debug)
     if res:
         old_row = None
         fg_first = True
         while res:
             row = res.pop(0)
-            #print(*row, sep='\t', flush=True)
             if old_row != row[0]:
                 #первое вхождение
                 if not fg_first:
@@ -159,13 +151,11 @@ FROM RDB$TRIGGERS r
 WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
     res = None
     options = []
-    with FBConn(ini) as fdb:
-        fdb.request(sql)
-        res = fdb.fetch()
+    res = get_fdb(ini, sql, debug=debug)
     if res:
         for row in res:
             #если в триггере присутствует gen_id, то его пропускаем
-            if 'gen_id' in row[3]:
+            if 'gen_id' in row[3].lower():
                 #skip
                 continue
             trig = {'name': row[0].strip(), 't_name': row[1].strip(), 'action': row[2].strip(), 'text': row[3].strip()}
@@ -178,15 +168,13 @@ FROM RDB$TRIGGERS r
 WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
     res = None
     options = {}
-    with FBConn(ini) as fdb:
-        fdb.request(sql)
-        res = fdb.fetch()
+    res = get_fdb(ini, sql, debug=debug)
     if res:
         for rows in res:
             name = rows[1].strip()
             row = rows[0]
             #если в триггере присутствует gen_id, то это генератор, обрабатываем его
-            if 'gen_id' in row:
+            if 'gen_id' in row.lower():
                 row = row.replace('\r', '')
                 cols = row.split('\n')
                 for col in cols:
@@ -203,9 +191,7 @@ WHERE r.RDB$SYSTEM_FLAG != 1
     AND r.RDB$GENERATOR_NAME NOT CONTAINING '$'
 ORDER by r.RDB$GENERATOR_NAME"""
     res = None
-    with FBConn(ini) as fdb:
-        fdb.request(sql)
-        res = fdb.fetch()
+    res = get_fdb(ini, sql, debug=debug)
     if res:
         r = {}
         for row in res:
@@ -213,23 +199,6 @@ ORDER by r.RDB$GENERATOR_NAME"""
             table, field = ii.rsplit('_', 1)
             r[table.strip()] = field.strip()
     return r
-
-
-
-def get_procedures_info(ini):
-    sql = """
-
-"""
-    res = None
-    with FBConn(ini) as fdb:
-        fdb.request(sql)
-        res = fdb.fetch()
-    if res:
-        for row in res:
-            print(*row, flush=True)
-
-def set_database(ini):
-    sql_cre_db = """create database SPR"""
 
 def cre_sql_tables(ini, options, seqs):
     seqs_names = seqs.keys()
@@ -243,6 +212,7 @@ def cre_sql_tables(ini, options, seqs):
                 seq = seqs.get(name)
             else:
                 seq = None
+            #не нужно, у нас все работают под postgres, а он sysdba
             #sql_grant = "\nGRANT ALL PRIVILEGES ON %s TO postgres;" % name
             fields_insert = []
             data = opt.get('data')
@@ -287,7 +257,7 @@ def cre_sql_tables(ini, options, seqs):
         sql += " );"
         if sql_grant:
             sql += sql_grant
-        print('creating table %s' % name)
+        print('creating table %s' % name, flush=True)
         yield sql
 
 def cre_sql_indices(ini, options):
@@ -325,7 +295,7 @@ def cre_sql_indices(ini, options):
                     r.append(ffs)
                     r.append(i_type)
         sql = sql_template % tuple(r)
-        print('creating indice %s' % name)
+        print('creating indice %s' % name, flush=True)
         yield sql
 
 def get_pkeys(ini, table):
@@ -341,11 +311,9 @@ join (
     WHERE r.RDB$RELATION_NAME = '%s'
     ) on c.RDB$INDEX_NAME = iname
 ORDER by fpos ASC""" % table
-    with FBConn(ini) as fdb:
-        fdb.request(sql)
-        res = fdb.fetch()
-    sql_ins = """,\nCONSTRAINT %s PRIMARY KEY(%s)"""
+    res = get_fdb(ini, sql, debug=debug)
     if res:
+        sql_ins = """,\nCONSTRAINT %s PRIMARY KEY(%s)"""
         ins = []
         for row in res:
             ins.append("%s" % row[0].strip())
@@ -360,11 +328,9 @@ BEGIN
 RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;""" # 0 - имя функции, 1 - блок DECLARE с внутренними переменными, 2 - текст функции
-
     sql_template = """DROP TRIGGER IF EXISTS {0} ON {1};
 CREATE TRIGGER {0}
 {2} ON {1} FOR EACH ROW EXECUTE PROCEDURE {3}();""" # 0 - имя триггера, 1 - имя таблицы, 2 - тип действия, например (BEFORE INSERT), 3 - имя функции
-
     for trig in trig_opt:
         trig_name = trig.get('name')
         func_name = trig_name + '_FUNC'
@@ -436,9 +402,16 @@ CREATE TRIGGER {0}
         print('creating trigger %s' % trig_name)
         yield sql
 
-def set_exec(ini, sql, debug=False):
+def set_exec(ini, sql, debug=False, fetch=False):
+    result = None
     with PGConn(ini, debug=debug) as db:
         db.execute(sql)
+        if fetch:
+            result = db.fetch()
+    if result:
+        return result
+    else:
+        return
 
 def get_pg_tables(ini, debug=False):
     res = None
@@ -446,14 +419,11 @@ def get_pg_tables(ini, debug=False):
     fields = None
     old_name = None
     sql = """select table_name, column_name, ordinal_position from information_schema.columns where table_schema='public' order by table_name, ordinal_position;"""
-    with PGConn(ini, debug=debug) as db:
-        db.execute(sql)
-        res = db.fetch()
+    res = set_exec(ini, sql, debug=debug, fetch=1)
     if res:
         for row in res:
             name = row[0]
             if old_name == None:
-                print('f'*40)
                 #первая строка
                 fields = []
                 fields.append(row[1])
@@ -485,9 +455,7 @@ def _gen_get_data(kwargs):
     params = []
     rows = None
     cc = 0
-    with FBConn(ini, debug=debug) as fdb:
-        fdb.request(sql)
-        rows = fdb.fetch()
+    res = get_fdb(ini, sql, debug=debug)
     if rows:
         for row in rows:
             row_ins = []
@@ -501,9 +469,7 @@ def _gen_get_data(kwargs):
 from information_schema.columns
 where table_name = '%s' and data_type = 'bytea';""" % name
     res = None
-    with PGConn(ini, debug=debug) as db:
-        db.request(sql_check)
-        res = db.fetch()
+    res = set_exec(ini, sql_check, debug=debug, fetch=1)
     if res:
         for row in res:
             byteas.append(row[1])
@@ -535,18 +501,16 @@ def _check_names(ini, in_field):
     return in_field
 
 def get_fb_data(ini, name, fields, only=None, exclude=None, debug=False):
-    print('pumping %s' % name)
+    print('pumping %s' % name, flush=True)
     if only and name != only:
-        print('skipping')
+        print('skipping', flush=True)
         return
     if exclude and name.lower() in exclude:
-        print('skipping')
+        print('skipping', flush=True)
         return
     res = None
     sql = """select count(*) from %s""" % name.upper()
-    with FBConn(ini, debug=debug) as fdb:
-        fdb.request(sql)
-        res = fdb.fetch()
+    res = get_fdb(ini, sql, debug=debug)
     if res:
         total_count = int(res[0][0])
     else:
@@ -586,9 +550,7 @@ WHERE
 c.oid = ('%s')::regclass::oid and not i.indisprimary
 ORDER BY ic.relname;"""%name
     res = None
-    with FBConn(ini, debug=debug) as fdb:
-        fdb.request(sql_fb)
-        res = fdb.fetch()
+    res = get_fdb(ini, sql, debug=debug)
     if res:
         pk = res[0][1].strip()
     else:
@@ -602,9 +564,8 @@ ORDER BY ic.relname;"""%name
     indices_drop = None
     indeces_sqls = None
     #отключаем индексы (удаляем)
-    with PGConn(ini, debug=debug) as db:
-        db.request(sql_ind)
-        res = db.fetch()
+    res = set_exec(ini, sql_ind, debug=debug, fetch=1)
+    if res:
         indices_drop, indeces_sqls = _get_pg_indeces(ini, res)
         if indices_drop:
             db.execute(indices_drop)
@@ -626,12 +587,10 @@ ORDER BY ic.relname;"""%name
         for r in results:
             q += int(r)
         cc += q
-
     #включаем индексы (создаем)
-    with PGConn(ini, debug=debug) as db:
-        if indeces_sqls:
-            db.execute(indeces_sqls)
-    print('total->', cc)
+    if indeces_sqls:
+        set_exec(ini, indeces_sqls, debug=debug)
+    print('total->', cc, flush=True)
 
 
 def _get_pg_indeces(ini, res):
@@ -647,6 +606,7 @@ def _get_pg_indeces(ini, res):
 
 def pg_check(ini, sql, debug=False):
     res = None
+    #res = set_exec(ini, sql, debug=debug, fetch=1)
     with PGConn(ini, debug=debug) as db:
         db.request(sql)
         res = db.fetch()
@@ -660,9 +620,7 @@ WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
     sql_template = """select setval('%s', %s, true);"""
     res = None
     options = {}
-    with FBConn(ini, debug=debug) as fdb:
-        fdb.request(sql)
-        res = fdb.fetch()
+    res = get_fdb(ini, sql, debug=debug)
     if res:
         for rows in res:
             name = rows[1].strip()
@@ -682,12 +640,17 @@ WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
                 res = None
                 if act:
                     sql = sql_temp % act
-                    with FBConn(ini, debug=debug) as fdb:
-                        fdb.request(sql)
-                        res = fdb.fetch()
+                    res = get_fdb(ini, sql, debug=debug)
                     if res:
                         sequence = '_'.join([name, field, 'seq'])
                         sql = sql_template % (sequence, int(res[0][0]))
                         print('set generator for %s' % name)
                         yield sql
+
+def get_fdb(ini, sql, debug=False):
+    result = None
+    with FBConn(ini) as fdb:
+        fdb.request(sql)
+        result = fdb.fetch()
+    return result
 
