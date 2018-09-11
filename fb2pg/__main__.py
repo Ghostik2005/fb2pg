@@ -12,16 +12,14 @@ def main():
         sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1, encoding='UTF-8')
     if sys.stderr.encoding != 'UTF-8':
         sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1, encoding='UTF-8')
-
     ini = init.INIT_APP()
-
     cre = ini.params.create
-    pump = ini.params.pump
-    options = None
-    idx_opt= None
-    trig_opt = None
-    rc = 1
-    if rc != 0:
+    rc = 0
+    if cre:
+        pump = ini.params.pump
+        options = None
+        idx_opt= None
+        trig_opt = None
         try:
             t1 = time.time()
             #tables
@@ -55,32 +53,10 @@ def main():
                 for sql in db_create.cre_sql_trigers(ini, trig_opt):
                     db_create.set_exec(ini, sql, debug=1)
 
-
             t2 = time.time()
             dt = t2 - t1
             print(time.strftime("Total executed time: %H:%M:%S", time.gmtime(dt)), flush=True)
 
-            return 0
-            
-            #check results
-            sql = """select id_spr, c_tovar, c_opisanie, dt, dt_actual from SPR where id_spr = 36"""
-            res = db_create.pg_check(ini, sql)
-            for row in res:
-                for col in row:
-                    try:
-                        col = col.tobytes()
-                    except:
-                        pass
-                    try:
-                        col = col.decode()
-                    except:
-                        pass
-                    print(col, sep='\t', end='\t')
-                print()
-
-            while True:
-                time.sleep(1)
-                break
         except KeyboardInterrupt as e:
             pass
         except SystemExit as e:
@@ -97,8 +73,3 @@ def main():
 if "__main__" == __name__:
     sys.exit(main())
 
-
-"""
-пример запроса с ограничением строк для pg
-select id, "USER", params from users order by id limit 4 offset 0;
-"""
