@@ -5,7 +5,7 @@ from multiprocessing.dummy import Pool as ThreadPool
 from dbcon import FBConn
 from dbcon import PGConn
 
-def get_fb_tables(ini):
+def get_fb_tables(ini, debug=True):
     sql = """select R.RDB$RELATION_NAME, R.RDB$FIELD_POSITION, R.RDB$FIELD_NAME,
 F.RDB$FIELD_LENGTH, 
 case f.rdb$field_type
@@ -66,6 +66,11 @@ order by R.RDB$RELATION_NAME, R.RDB$FIELD_POSITION"""
                     all_data.append(column)
                 column = {}
                 column['tablename'] = row[0]
+                qwe = row[0].upper()
+                if column['tablename'] != qwe:
+                    column['tablename'] = "\"%s\"" % column['tablename'].strip()
+                else:
+                    column['tablename'] = column['tablename'].lower()
                 column['data'] = []
                 c_data = {'name': row[2], 'size': row[3], 'type': row[4], 'notnull': True if row[8]=='1' else False, 'pk': True if row[7]=='1' else False, 'default': row[9] if row[9] else False}
                 column['data'].append(c_data)
@@ -77,7 +82,7 @@ order by R.RDB$RELATION_NAME, R.RDB$FIELD_POSITION"""
         all_data.append(column)
     return all_data
 
-def get_indices_info(ini):
+def get_indices_info(ini, debug=True):
     sql = """SELECT r.RDB$INDEX_NAME as I_NAME, r.RDB$RELATION_NAME as T_NAME, s.RDB$FIELD_NAME as F_NAME, s.RDB$FIELD_POSITION as POS_IN_MULT,
     CASE r.RDB$UNIQUE_FLAG
         WHEN 1 THEN 'UNIQUE'
@@ -123,7 +128,7 @@ ORDER by r.RDB$INDEX_NAME, s.RDB$FIELD_POSITION"""
         all_data.append(column)
     return all_data
 
-def get_triggers_info(ini):
+def get_triggers_info(ini, debug=True):
     sql = """SELECT r.RDB$TRIGGER_NAME, r.RDB$RELATION_NAME,
     CASE r.RDB$TRIGGER_TYPE
     WHEN 1 THEN 'BEFORE INSERT'
@@ -162,7 +167,7 @@ WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
             options.append(trig)
     return options
 
-def get_triggers_gen_info(ini):
+def get_triggers_gen_info(ini, debug=True):
     sql = """SELECT r.RDB$TRIGGER_SOURCE, r.RDB$RELATION_NAME
 FROM RDB$TRIGGERS r
 WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
@@ -172,6 +177,10 @@ WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
     if res:
         for rows in res:
             name = rows[1].strip()
+            if name != name.upper():
+                name = "\"%s\"" % name
+            else:
+                name = name.lower()
             row = rows[0]
             #если в триггере присутствует gen_id, то это генератор, обрабатываем его
             if 'gen_id' in row.lower():
@@ -181,10 +190,14 @@ WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
                     if 'gen_id' in col and 'new' in col:
                         act = col.split('=')[0].strip()
                         _, field = act.split('.')
-                        options[name.strip().upper()] = field.strip().upper()
+                        #name = name.strip()
+                        #if name != name.upper():
+                            #options["\"%s\"" % name] = field.strip().upper()
+                        #else:
+                        options[name] = field.strip().upper()
     return options
 
-def get_generators_info(ini):
+def get_generators_info(ini, debug=True):
     sql = """SELECT r.RDB$GENERATOR_NAME
 FROM RDB$GENERATORS r
 WHERE r.RDB$SYSTEM_FLAG != 1
@@ -200,18 +213,22 @@ ORDER by r.RDB$GENERATOR_NAME"""
             r[table.strip()] = field.strip()
     return r
 
-def cre_sql_tables(ini, options, seqs):
+def cre_sql_tables(ini, options, seqs, debug=True):
     seqs_names = seqs.keys()
+    #print(seqs_names)
     sql_template = """CREATE TABLE IF NOT EXISTS %s ( %s"""
     sql_grant = None
     for opt in options:
+        seq = None
         name = opt.get('tablename')
         if name:
+            #print(name)
             name = name.strip()
             if name in seqs_names:
                 seq = seqs.get(name)
-            else:
-                seq = None
+                #print(seq)
+            #else:
+                #seq = None
             #не нужно, у нас все работают под postgres, а он sysdba
             #sql_grant = "\nGRANT ALL PRIVILEGES ON %s TO postgres;" % name
             fields_insert = []
@@ -260,7 +277,7 @@ def cre_sql_tables(ini, options, seqs):
         print('creating table %s' % name, flush=True)
         yield sql
 
-def cre_sql_indices(ini, options):
+def cre_sql_indices(ini, options, debug=True):
     sql_template = """CREATE %s INDEX IF NOT EXISTS %s on %s (%s %s)"""
     for opt in options:
         name = opt.get('idx_name')
@@ -298,7 +315,8 @@ def cre_sql_indices(ini, options):
         print('creating indice %s' % name, flush=True)
         yield sql
 
-def get_pkeys(ini, table):
+def get_pkeys(ini, table, debug=True):
+    sql_ins = None
     res = None
     sql = """SELECT fname, fpos, iname
 FROM RDB$RELATION_CONSTRAINTS c
@@ -310,7 +328,7 @@ join (
     JOIN RDB$INDEX_SEGMENTS s ON r.RDB$INDEX_NAME = s.RDB$INDEX_NAME
     WHERE r.RDB$RELATION_NAME = '%s'
     ) on c.RDB$INDEX_NAME = iname
-ORDER by fpos ASC""" % table
+ORDER by fpos ASC""" % table.upper()
     res = get_fdb(ini, sql, debug=debug)
     if res:
         sql_ins = """,\nCONSTRAINT %s PRIMARY KEY(%s)"""
@@ -320,7 +338,7 @@ ORDER by fpos ASC""" % table
         sql_ins = sql_ins % (res[0][2].strip(), ','.join(ins))
     return sql_ins
 
-def cre_sql_trigers(ini, trig_opt):
+def cre_sql_trigers(ini, trig_opt, debug=True):
     sql_template_func = """CREATE OR REPLACE FUNCTION {0}() RETURNS TRIGGER AS $$
 {1}
 BEGIN
@@ -423,6 +441,10 @@ def get_pg_tables(ini, debug=False):
     if res:
         for row in res:
             name = row[0]
+            if name != name.lower():
+                name = "\"%s\"" % name
+            else:
+                name = name.lower()
             if old_name == None:
                 #первая строка
                 fields = []
@@ -452,27 +474,32 @@ def _gen_get_data(kwargs):
     sql_template = """select {0} from {1} r order by r.{2} asc rows {3} to {4}"""
     sql_t = """insert into {0} ({1}) values ({2}) ON CONFLICT DO NOTHING;"""
     sql = sql_template.format(sql_fields, name, pk, c1, c2)
+    #print(sql)
     params = []
     rows = None
-    cc = 0
+    ccc = 0
+    #print("sql\t", sql)
     res = get_fdb(ini, sql, debug=debug)
-    if rows:
-        for row in rows:
+    if res:
+        for row in res:
             row_ins = []
             for col in row:
                 row_ins.append(col)
             params.append(row_ins)
-            cc += 1
+            ccc += 1
     #проверяем, может какое поле bytea
     byteas = []
     sql_check = """select table_name, column_name, data_type
 from information_schema.columns
 where table_name = '%s' and data_type = 'bytea';""" % name
     res = None
-    res = set_exec(ini, sql_check, debug=debug, fetch=1)
+    #print(sql_check)
+    res = set_exec(ini, sql_check, debug=debug, fetch=True)
+    #print("_"*20)
+    #print(res)
     if res:
         for row in res:
-            byteas.append(row[1])
+            byteas.append(row[1].lower())
     qqs = []
     iis = []
     for i, f in enumerate(fields):
@@ -484,16 +511,22 @@ where table_name = '%s' and data_type = 'bytea';""" % name
     for i in iis:
         for para in params:
             if para[i]:
+                #print(para[i])
                 try:
                     data = para[i].encode()
                 except:
+                    #print('eeeeeeeee', para[i], sep="\t")
                     data = para[i]
                 para[i] = psycopg2.Binary(data)
+                #print(para[i])
     sql_fields = ','.join([_check_names(ini, fi) for fi in fields])
     with PGConn(ini, debug=debug) as db:
         sql = sql_t.format(name, sql_fields, values)
+        #print(sql)
+        #print(params)
         db.executemany(sql, params)
-    return cc
+    #print('ccc->', ccc)
+    return ccc
 
 def _check_names(ini, in_field):
     if in_field in ini.params.excludes:
@@ -502,14 +535,24 @@ def _check_names(ini, in_field):
 
 def get_fb_data(ini, name, fields, only=None, exclude=None, debug=False):
     print('pumping %s' % name, flush=True)
-    if only and name != only:
+    #print(only)
+    if only and name.lower() != only.lower():
         print('skipping', flush=True)
         return
     if exclude and name.lower() in exclude:
         print('skipping', flush=True)
         return
     res = None
-    sql = """select count(*) from %s""" % name.upper()
+    pg_name = name
+    #print("*"*20)
+    #print(name)
+    #print(name.upper())
+    if name != name.lower():
+        fb_name = "\"%s\"" % name
+    else:
+        fb_name = name.upper()
+    sql = """select count(*) from %s""" % fb_name
+    #print(sql)
     res = get_fdb(ini, sql, debug=debug)
     if res:
         total_count = int(res[0][0])
@@ -520,7 +563,7 @@ def get_fb_data(ini, name, fields, only=None, exclude=None, debug=False):
     c1 = 1
     cnt = ini.params.potion
     c2 = c1 + cnt - 1
-    sql_fb = """select R.RDB$RELATION_NAME, R.RDB$FIELD_NAME, tt PK
+    sql = """select R.RDB$RELATION_NAME, R.RDB$FIELD_NAME, tt PK
 from RDB$FIELDS F, RDB$RELATION_FIELDS R
 left JOIN (
     SELECT c.RDB$RELATION_NAME rn, seg.RDB$FIELD_NAME jn, c.RDB$CONSTRAINT_TYPE tt
@@ -530,9 +573,9 @@ left JOIN (
     ) on r.RDB$FIELD_NAME = jn AND r.RDB$RELATION_NAME = rn
 JOIN RDB$RELATIONS rel on rel.RDB$RELATION_NAME = r.RDB$RELATION_NAME
 where F.RDB$FIELD_NAME = R.RDB$FIELD_SOURCE and R.RDB$SYSTEM_FLAG = 0 and R.RDB$RELATION_NAME NOT CONTAINING '$' and rel.RDB$VIEW_SOURCE IS NULL
-AND r.RDB$RELATION_NAME = upper('%s')
+AND r.RDB$RELATION_NAME = '%s'
 AND tt is NOT NULL
-order by R.RDB$RELATION_NAME, R.RDB$FIELD_POSITION""" % name
+order by R.RDB$RELATION_NAME, R.RDB$FIELD_POSITION""" % fb_name
     sql_ind = """SELECT ic.oid,pg_get_indexdef(ic.oid),ic.relname AS name, am.amname, i.indisprimary AS pri,
 i.indisunique AS uni, i.indkey AS fields, i.indclass AS fopclass,
 i.indisclustered, ic.oid AS indid, c.oid AS relid, ds.description,
@@ -548,9 +591,10 @@ LEFT OUTER JOIN pg_constraint cn ON i.indrelid = cn.conrelid AND ic.relname = cn
 LEFT OUTER JOIN pg_tablespace ts ON ts.oid = ic.reltablespace
 WHERE
 c.oid = ('%s')::regclass::oid and not i.indisprimary
-ORDER BY ic.relname;"""%name
+ORDER BY ic.relname;"""% fb_name
     res = None
     res = get_fdb(ini, sql, debug=debug)
+    print(res)
     if res:
         pk = res[0][1].strip()
     else:
@@ -568,14 +612,18 @@ ORDER BY ic.relname;"""%name
     if res:
         indices_drop, indeces_sqls = _get_pg_indeces(ini, res)
         if indices_drop:
-            db.execute(indices_drop)
+            set_exec(ini, indices_drop, debug=debug)
+            #db.execute(indices_drop)
     cpu_number = ini.params.cpu
     while total_count > 0:
         #создаем пулл в зависимости от количества ядер
         pool = ThreadPool(cpu_number)
         p_list = []
         for cpu in range(cpu_number):
-            pump_params = {'ini': ini, 'sql_fields': sql_fields, 'name': name, 'c1': c1, 'c2': c2, 'pk': pk, 'fields': fields, 'debug':debug, 'cpu': cpu}
+            if total_count < 0:
+                pump_params = {'ini': ini, 'sql_fields': sql_fields, 'name': name, 'c1': 1, 'c2': 0, 'pk': pk, 'fields': fields, 'debug':debug, 'cpu': cpu}
+            else:
+                pump_params = {'ini': ini, 'sql_fields': sql_fields, 'name': name, 'c1': c1, 'c2': c2, 'pk': pk, 'fields': fields, 'debug':debug, 'cpu': cpu}
             p_list.append(pump_params)
             c2 = c2 + cnt
             c1 = c1 + cnt
@@ -624,6 +672,10 @@ WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
     if res:
         for rows in res:
             name = rows[1].strip()
+            if name != name.upper():
+                name = "\"%s\"" % name
+            else:
+                name = name.lower()
             row = rows[0]
             #если в триггере присутствует gen_id, то это генератор, обрабатываем его
             if 'gen_id' in row:
@@ -643,6 +695,8 @@ WHERE r.RDB$SYSTEM_FLAG != 1 AND r.RDB$RELATION_NAME NOT CONTAINING '$'"""
                     res = get_fdb(ini, sql, debug=debug)
                     if res:
                         sequence = '_'.join([name, field, 'seq'])
+                        if sequence.find('"') != -1:
+                            sequence = "\"%s\"" % sequence.replace('"', '') 
                         sql = sql_template % (sequence, int(res[0][0]))
                         print('set generator for %s' % name)
                         yield sql
