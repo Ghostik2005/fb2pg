@@ -2,6 +2,7 @@
 #db connector
 
 import fdb
+import sys
 import psycopg2
 import traceback
 
@@ -64,7 +65,21 @@ class FBConn(object):
             if commit:
                 self.con.commit()
             try:
-                self.result = cur.fetchall()
+                ress = cur.fetchall()
+                # print(result)
+                ret = []
+                for row in ress:
+                    ret_row = []
+                    for col in list(row):
+                        if 'BlobReader' in str(type(col)):
+                            # print(dir(col))
+                            # print("&"*30)
+                            # print(col)
+                            ret_row.append(col.read())
+                        else:
+                            ret_row.append(col)
+                    ret.append(ret_row)
+                self.result = ret
             except:
                 pass
         finally:
@@ -115,6 +130,11 @@ class PGConn(object):
             cur.executemany(self.sql, self.params)
         except:
             self.error = traceback.format_exc()
+            # print("@"*10)
+            # print(self.sql)
+            # print("@"*10)
+            # print(self.params)
+            # print("@"*10)
         else:
             self.con.commit()
         finally:
@@ -136,16 +156,19 @@ class PGConn(object):
     def _log(self):
         #self.log("SQLRequest: %s" %self.sql)
         if self.error:
+            self.log('***********')
             self.log("SQLError: %s" %self.error)
-            self.log('********')
+            self.log('***********')
             self.log("SQLRequest: %s" %self.sql)
-            self.log('********')
+            self.log('***********')
+            self.log("SQLParamsResult: %s" %self.params)
+            self.log('***********')
         if self.result:
             pass
             #self.log("SQLResult: %s" %self.result)
         if self.params:
             pass
-            #self.log("SQLResult: %s" %self.params)
+            #self.log("SQLParamsResult: %s" %self.params)
 
     def _request(self, commit=True):
         self.result = None

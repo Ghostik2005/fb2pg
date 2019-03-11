@@ -49,6 +49,12 @@ class INIT_APP(object):
             self.params.pump = 1
         elif self.params.pump == False or self.params.pump.title() == 'False':
             self.params.pump = 0
+        self.params.create_triggers = init.get('triggers')
+        if self.params.create_triggers == True or self.params.create_triggers.title() == 'True':
+            self.params.create_triggers = 1
+        elif self.params.create_triggers == False or self.params.create_triggers.title() == 'False':
+            self.params.create_triggers = 0
+
         self.params.create = init.get('create')
         if self.params.create == True or self.params.create.title() == 'True':
             self.params.create = 1

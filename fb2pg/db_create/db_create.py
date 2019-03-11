@@ -358,13 +358,18 @@ CREATE TRIGGER {0}
         trig_text.replace('\r', '')
         trig_text_list = trig_text.split('\n')
         new_trig_text_list = []
-        fg_dc = False
         declare = []
         into_vars = []
         for row in trig_text_list:
             row = row.strip()
             row = row.upper()
-            if 'as' in row.lower() or 'begin' in row.lower() or 'end' in row.lower() or row.strip().startswith('--') or not row:
+            if row.strip().startswith('--') or not row:
+                continue
+            if 'AS' in row and len(row)==2:
+                continue
+            if 'BEGIN' in row and len(row)==5:
+                continue
+            if 'END' in row and len(row)==3:
                 continue
             if 'DECLARE' in row:
                 #есть объявления переменных
@@ -378,6 +383,9 @@ CREATE TRIGGER {0}
                 _, i_v = row.strip().split(':')
                 into_vars.append(i_v.replace(';', ''))
                 row = row.replace('INTO:', '').replace('INTO', '').replace(':%s'%i_v, ';').replace(i_v, ';')
+            if 'EXCEPTION' in row:
+                row = "RAISE EXCEPTION USING MESSAGE = 'insert or update Error';"
+
             row = row.replace('CURRENT_TIMESTAMP', 'now()')
             new_trig_text_list.append(row)
         trig_text = '\n'.join(new_trig_text_list)
@@ -396,15 +404,19 @@ CREATE TRIGGER {0}
             declare = 'DECLARE ' + '\n'.join(declare)
         else:
             declare = ''
-        if 'if' in trig_text.lower():
-            if_pos = trig_text.lower().find('if')
-            then_pos = trig_text.lower().find('then', if_pos)
-            if 'else' not in trig_text.lower():
-                semi_pos = trig_text.lower().find(';', then_pos)
-            else:
-                else_pos = trig_text.lower().find('else', then_pos)
-                semi_pos = trig_text.lower().find(';', else_pos)
-            trig_text = trig_text[:semi_pos+1] + '\nEND IF;\n' + trig_text[semi_pos+1:]
+        if_count = trig_text.count('IF')
+        if if_count > 0:
+            ppos = 0
+            for q in range(if_count):
+                if_pos = trig_text.find('IF', ppos)
+                then_pos = trig_text.find('THEN', if_pos)
+                if 'ELSE' not in trig_text:
+                    semi_pos = trig_text.find(';', then_pos)
+                else:
+                    else_pos = trig_text.find('ELSE', then_pos)
+                    semi_pos = trig_text.find(';', else_pos)
+                trig_text = trig_text[:semi_pos+1] + '\nEND IF;\n' + trig_text[semi_pos+1:]
+                ppos = semi_pos
         ddot_inx = trig_text.count(':=')
         ddot = 0
         for i in range(ddot_inx):
@@ -511,11 +523,11 @@ where table_name = '%s' and data_type = 'bytea';""" % name
     for i in iis:
         for para in params:
             if para[i]:
-                #print(para[i])
+                # print(para[i])
                 try:
                     data = para[i].encode()
                 except:
-                    #print('eeeeeeeee', para[i], sep="\t")
+                    # print('data:', para[i], sep="\t")
                     data = para[i]
                 para[i] = psycopg2.Binary(data)
                 #print(para[i])
@@ -551,6 +563,7 @@ def get_fb_data(ini, name, fields, only=None, exclude=None, debug=False):
         fb_name = "\"%s\"" % name
     else:
         fb_name = name.upper()
+
     sql = """select count(*) from %s""" % fb_name
     #print(sql)
     res = get_fdb(ini, sql, debug=debug)
@@ -560,6 +573,19 @@ def get_fb_data(ini, name, fields, only=None, exclude=None, debug=False):
         return
     if total_count == 0:
         return
+
+    #нужно отключить триггеры, если они есть
+    sql_trig = f"""select c.relname, t.tgrelid, t.tgname, t.tgfoid 
+from pg_trigger t
+join pg_class c on c.oid = t.tgrelid
+where c.relname = '{name}';"""
+    triggers = set_exec(ini, sql_trig, debug=debug, fetch=1)
+    tt = []
+    if triggers:
+        for row in triggers:
+            tt.append(row[2])
+    triggers = tt
+    triggers = ','.join(triggers)
     c1 = 1
     cnt = ini.params.potion
     c2 = c1 + cnt - 1
@@ -615,6 +641,10 @@ ORDER BY ic.relname;"""% fb_name
             set_exec(ini, indices_drop, debug=debug)
             #db.execute(indices_drop)
     cpu_number = ini.params.cpu
+    sql_triggers = f"""alter table {name} %s trigger %s;"""
+    #отключаем триггеры
+    if triggers:
+        set_exec(ini, sql_triggers % ('disable', triggers), debug=debug)
     while total_count > 0:
         #создаем пулл в зависимости от количества ядер
         pool = ThreadPool(cpu_number)
@@ -635,6 +665,11 @@ ORDER BY ic.relname;"""% fb_name
         for r in results:
             q += int(r)
         cc += q
+    
+    #включаем триггеры
+    if triggers:
+        set_exec(ini, sql_triggers % ('enable', triggers), debug=debug)
+    
     #включаем индексы (создаем)
     if indeces_sqls:
         set_exec(ini, indeces_sqls, debug=debug)
